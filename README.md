@@ -1,7 +1,7 @@
 # golic
 
 
-The CLI tool that collects the license information of the repository the packages depend on.
+The CLI tool that collects the license information of the repositories the packages depend on.
 
 ## Install
 
