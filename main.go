@@ -14,21 +14,34 @@ import (
 	lic "github.com/ryanuber/go-license"
 )
 
-func main() {
+const usageTmpl = `
+Usage of %s:
+  %s [options] packages...
 
+options:
+`
+
+func init() {
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, usageTmpl, os.Args[0], os.Args[0])
+		flag.PrintDefaults()
+	}
+}
+
+func main() {
 	format := ""
 	licensesDir := ""
-	flag.StringVar(&format, "format", "json", "output format. json or csv. default is json.")
-	flag.StringVar(&licensesDir, "licenses_dir", "", "directory path to output LICENSE files.")
+	flag.StringVar(&format, "format", "json", "specify the format. json or csv.")
+	flag.StringVar(&licensesDir, "licenses_dir", "", "output LICENSE files to the specified directory.")
 	flag.Parse()
 
-	targets := flag.Args()
-	if len(targets) == 0 {
-		fmt.Fprintln(os.Stderr, "targets required.")
-		os.Exit(1)
+	pkgs := flag.Args()
+	if len(pkgs) == 0 {
+		flag.Usage()
+		return
 	}
 
-	imports, err := getImportPaths(targets)
+	imports, err := getImportPaths(pkgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to get import paths:", err)
 		os.Exit(1)
@@ -109,6 +122,7 @@ func (ll licenseList) include(pkg string) bool {
 
 func (ll licenseList) writeJSON(w io.Writer) error {
 	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
 	return enc.Encode(struct {
 		Licenses []license `json:"licenses,omitempty"`
 	}{ll})
