@@ -97,21 +97,22 @@ func getImportPaths(targets []string) ([]string, error) {
 	return strings.Split(strings.TrimRight(string(out), "\n"), "\n"), nil
 }
 
-type license struct {
-	l          *lic.License
+type licenseInfo struct {
+	license    *lic.License
+	ImportPath string `json:"path,omitempty"`
 	Repository string `json:"repo,omitempty"`
 	Type       string `json:"type,omitempty"`
 	Revision   string `json:"rev,omitempty"`
 	URL        string `json:"url,omitempty"`
 }
 
-func (l license) include(pkg string) bool {
+func (l licenseInfo) include(pkg string) bool {
 	return strings.HasPrefix(pkg, l.Repository)
 }
 
-type licenseList []license
+type licenseInfoList []licenseInfo
 
-func (ll licenseList) include(pkg string) bool {
+func (ll licenseInfoList) include(pkg string) bool {
 	for _, l := range ll {
 		if l.include(pkg) {
 			return true
@@ -120,33 +121,37 @@ func (ll licenseList) include(pkg string) bool {
 	return false
 }
 
-func (ll licenseList) writeJSON(w io.Writer) error {
+func (ll licenseInfoList) writeJSON(w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(struct {
-		Licenses []license `json:"licenses,omitempty"`
+		Licenses []licenseInfo `json:"licenses,omitempty"`
 	}{ll})
 }
 
-func (ll licenseList) writeCSV(w io.Writer) error {
+func (ll licenseInfoList) writeCSV(w io.Writer) error {
 	cw := csv.NewWriter(w)
 	cw.UseCRLF = true
 	defer cw.Flush()
 
-	if err := cw.Write([]string{"repo", "type", "rev", "url"}); err != nil {
+	if err := cw.Write([]string{"path", "repo", "type", "rev", "url"}); err != nil {
 		return err
 	}
 
 	for _, l := range ll {
-		if err := cw.Write([]string{l.Repository, l.Type, l.Revision, l.URL}); err != nil {
+		if err := cw.Write([]string{l.ImportPath, l.Repository, l.Type, l.Revision, l.URL}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ll licenseList) dump(dir string) error {
+func (ll licenseInfoList) dump(dir string) error {
 	for _, l := range ll {
+		if l.license == nil {
+			continue
+		}
+
 		p := filepath.Join(dir, l.Repository)
 		err := os.MkdirAll(p, 0755)
 		if err != nil {
@@ -159,7 +164,7 @@ func (ll licenseList) dump(dir string) error {
 		}
 		defer f.Close()
 
-		_, err = io.Copy(f, strings.NewReader(l.l.Text))
+		_, err = io.Copy(f, strings.NewReader(l.license.Text))
 		if err != nil {
 			return err
 		}
@@ -167,40 +172,41 @@ func (ll licenseList) dump(dir string) error {
 	return nil
 }
 
-func getLicenses(imports []string) (licenseList, error) {
-	gopath := os.Getenv("GOPATH")
-
-	var ls licenseList
+func getLicenses(imports []string) (licenseInfoList, error) {
+	var ls licenseInfoList
 
 	for _, im := range imports {
 		if ls.include(im) {
 			continue
 		}
 
-		dirs := strings.Split(im, "/")
-		for i := len(dirs); i != 0; i-- {
-			subdir := dirs[0:i]
-			dir := filepath.Join(append([]string{gopath, "src"}, subdir...)...)
-			l, err := lic.NewFromDir(dir)
+		src := filepath.Join(os.Getenv("GOPATH"), "src")
+		dir := filepath.Join(src, im)
+
+		g, err := getGitInfo(dir)
+		if err != nil {
+			continue
+		}
+
+		li := licenseInfo{
+			ImportPath: im,
+			Revision:   g.Commit,
+			Type:       "Unknown",
+			URL:        g.OriginURL,
+		}
+
+		for rep := im; rep != "."; rep = filepath.Dir(rep) {
+			l, err := lic.NewFromDir(filepath.Join(src, rep))
 			if err != nil {
 				continue
 			}
 
-			repo := strings.Join(subdir, "/")
-			g, err := getGitInfo(dir)
-			if err != nil {
-				continue
-			}
-
-			ls = append(ls, license{
-				l:          l,
-				Repository: repo,
-				Type:       l.Type,
-				Revision:   g.Commit,
-				URL:        g.OriginURL,
-			})
+			li.license = l
+			li.Repository = rep
+			li.Type = l.Type
 			break
 		}
+		ls = append(ls, li)
 	}
 
 	return ls, nil
