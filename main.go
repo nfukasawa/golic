@@ -107,6 +107,9 @@ type licenseInfo struct {
 }
 
 func (l licenseInfo) include(pkg string) bool {
+	if l.Repository == "" {
+		return false
+	}
 	return strings.HasPrefix(pkg, l.Repository)
 }
 
