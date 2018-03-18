@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	lic "github.com/ryanuber/go-license"
+	lic "github.com/nfukasawa/go-license"
 )
 
 const usageTmpl = `
@@ -97,42 +97,63 @@ func getImportPaths(targets []string) ([]string, error) {
 	return strings.Split(strings.TrimRight(string(out), "\n"), "\n"), nil
 }
 
-type licenseInfo struct {
-	license    *lic.License
-	ImportPath string `json:"path,omitempty"`
-	Repository string `json:"repo,omitempty"`
-	Type       string `json:"type,omitempty"`
-	Revision   string `json:"rev,omitempty"`
-	URL        string `json:"url,omitempty"`
+type license struct {
+	Type string `json:"type,omitempty"`
+	File string `json:"file,omitempty"`
+	Text string `json:"-"`
 }
 
-func (l licenseInfo) include(pkg string) bool {
+func newLicense(l *lic.License) license {
+	return license{
+		Type: l.Type,
+		File: filepath.Base(l.File),
+		Text: l.Text,
+	}
+}
+
+func newLicenses(ls []*lic.License) []license {
+	ret := make([]license, len(ls))
+	for i, l := range ls {
+		ret[i] = newLicense(l)
+	}
+	return ret
+}
+
+type pkgInfo struct {
+	ImportPath string    `json:"path,omitempty"`
+	Repository string    `json:"repo,omitempty"`
+	Revision   string    `json:"rev,omitempty"`
+	URL        string    `json:"url,omitempty"`
+	Licenses   []license `json:"licenses,omitempty"`
+}
+
+func (l pkgInfo) include(pkg string) bool {
 	if l.Repository == "" {
 		return false
 	}
 	return strings.HasPrefix(pkg, l.Repository)
 }
 
-type licenseInfoList []licenseInfo
+type pkgInfoList []pkgInfo
 
-func (ll licenseInfoList) include(pkg string) bool {
-	for _, l := range ll {
-		if l.include(pkg) {
+func (pl pkgInfoList) include(pkg string) bool {
+	for _, p := range pl {
+		if p.include(pkg) {
 			return true
 		}
 	}
 	return false
 }
 
-func (ll licenseInfoList) writeJSON(w io.Writer) error {
+func (pl pkgInfoList) writeJSON(w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(struct {
-		Licenses []licenseInfo `json:"licenses,omitempty"`
-	}{ll})
+		Licenses []pkgInfo `json:"packages,omitempty"`
+	}{pl})
 }
 
-func (ll licenseInfoList) writeCSV(w io.Writer) error {
+func (pl pkgInfoList) writeCSV(w io.Writer) error {
 	cw := csv.NewWriter(w)
 	cw.UseCRLF = true
 	defer cw.Flush()
@@ -141,78 +162,85 @@ func (ll licenseInfoList) writeCSV(w io.Writer) error {
 		return err
 	}
 
-	for _, l := range ll {
-		if err := cw.Write([]string{l.ImportPath, l.Repository, l.Type, l.Revision, l.URL}); err != nil {
+	for _, p := range pl {
+		types := make([]string, len(p.Licenses))
+		for i, l := range p.Licenses {
+			types[i] = l.File + ":" + l.Type
+		}
+		if err := cw.Write([]string{p.ImportPath, p.Repository, strings.Join(types, " "), p.Revision, p.URL}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ll licenseInfoList) dump(dir string) error {
-	for _, l := range ll {
-		if l.license == nil {
+func (pl pkgInfoList) dump(dir string) error {
+	for _, p := range pl {
+		if len(p.Licenses) == 0 {
 			continue
 		}
 
-		p := filepath.Join(dir, l.Repository)
-		err := os.MkdirAll(p, 0755)
+		subdir := filepath.Join(dir, p.Repository)
+		err := os.MkdirAll(subdir, 0755)
 		if err != nil {
 			return err
 		}
 
-		f, err := os.Create(filepath.Join(p, "LICENSE"))
-		if err != nil {
-			return err
-		}
-		defer f.Close()
+		for _, l := range p.Licenses {
+			f, err := os.Create(filepath.Join(subdir, l.File))
+			if err != nil {
+				return err
+			}
+			defer f.Close()
 
-		_, err = io.Copy(f, strings.NewReader(l.license.Text))
-		if err != nil {
-			return err
+			_, err = io.Copy(f, strings.NewReader(l.Text))
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func getLicenses(imports []string) (licenseInfoList, error) {
-	var ls licenseInfoList
+func getLicenses(imports []string) (pkgInfoList, error) {
+	var ps pkgInfoList
 
 	for _, im := range imports {
-		if ls.include(im) {
+		if ps.include(im) {
 			continue
 		}
 
 		src := filepath.Join(os.Getenv("GOPATH"), "src")
 		dir := filepath.Join(src, im)
 
+		if src == dir {
+			break
+		}
+
 		g, err := getGitInfo(dir)
 		if err != nil {
 			continue
 		}
 
-		li := licenseInfo{
+		p := pkgInfo{
 			ImportPath: im,
 			Revision:   g.Commit,
-			Type:       "Unknown",
 			URL:        g.OriginURL,
 		}
 
 		for rep := im; rep != "."; rep = filepath.Dir(rep) {
-			l, err := lic.NewFromDir(filepath.Join(src, rep))
+			ls, err := lic.NewLicencesFromDir(filepath.Join(src, rep))
 			if err != nil {
 				continue
 			}
-
-			li.license = l
-			li.Repository = rep
-			li.Type = l.Type
+			p.Licenses = newLicenses(ls)
+			p.Repository = rep
 			break
 		}
-		ls = append(ls, li)
+		ps = append(ps, p)
 	}
 
-	return ls, nil
+	return ps, nil
 }
 
 type gitInfo struct {
@@ -233,14 +261,12 @@ func getGitInfo(dir string) (info gitInfo, err error) {
 
 	commit, err := exec.Command("git", "log", "-1", "--format=%H").Output()
 	if err != nil {
-		fmt.Println(err)
 		return info, err
 	}
 	info.Commit = strings.TrimSpace(string(commit))
 
 	origin, err := exec.Command("git", "remote", "get-url", "origin").Output()
 	if err != nil {
-		fmt.Println(err)
 		return info, err
 	}
 	info.OriginURL = strings.TrimSpace(string(origin))
