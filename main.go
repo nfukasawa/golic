@@ -237,7 +237,7 @@ func getLicenses(imports []string) (pkgInfoList, error) {
 					continue
 				}
 				p.Licenses = newLicenses(ls)
-				p.Repository = rep
+				p.Repository = strings.Replace(rep, "\\", "/", -1)
 				break
 			}
 			ps = append(ps, p)
