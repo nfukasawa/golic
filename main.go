@@ -205,39 +205,44 @@ func (pl pkgInfoList) dump(dir string) error {
 func getLicenses(imports []string) (pkgInfoList, error) {
 	var ps pkgInfoList
 
+	gopaths := strings.Split(os.Getenv("GOPATH"), ";")
+
 	for _, im := range imports {
 		if ps.include(im) {
 			continue
 		}
 
-		src := filepath.Join(os.Getenv("GOPATH"), "src")
-		dir := filepath.Join(src, im)
+		for _, gopath := range gopaths {
+			src := filepath.Join(gopath, "src")
+			dir := filepath.Join(src, im)
 
-		if src == dir {
-			break
-		}
+			if src == dir {
+				break
+			}
 
-		g, err := getGitInfo(dir)
-		if err != nil {
-			continue
-		}
-
-		p := pkgInfo{
-			ImportPath: im,
-			Revision:   g.Commit,
-			URL:        g.OriginURL,
-		}
-
-		for rep := im; rep != "."; rep = filepath.Dir(rep) {
-			ls, err := lic.NewLicencesFromDir(filepath.Join(src, rep))
+			g, err := getGitInfo(dir)
 			if err != nil {
 				continue
 			}
-			p.Licenses = newLicenses(ls)
-			p.Repository = rep
+
+			p := pkgInfo{
+				ImportPath: im,
+				Revision:   g.Commit,
+				URL:        g.OriginURL,
+			}
+
+			for rep := im; rep != "."; rep = filepath.Dir(rep) {
+				ls, err := lic.NewLicencesFromDir(filepath.Join(src, rep))
+				if err != nil {
+					continue
+				}
+				p.Licenses = newLicenses(ls)
+				p.Repository = rep
+				break
+			}
+			ps = append(ps, p)
 			break
 		}
-		ps = append(ps, p)
 	}
 
 	return ps, nil
