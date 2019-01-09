@@ -232,7 +232,7 @@ func getLicenses(imports []string) (pkgInfoList, error) {
 			}
 
 			for rep := im; rep != "."; rep = filepath.Dir(rep) {
-				ls, err := lic.NewLicencesFromDir(filepath.Join(src, rep))
+				ls, err := lic.NewLicensesFromDir(filepath.Join(src, rep))
 				if err != nil {
 					continue
 				}
